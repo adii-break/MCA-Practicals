@@ -1,0 +1,308 @@
+1) main.c :
+#include"lpc214x.h"
+#include<stdio.h>
+
+#define RTConPrescaler 1 		// should be 1 if using PCLK for clock source else 0 for external oscillator
+
+
+extern void UartInit(unsigned int ); 			// function defined in serial.c
+
+void delay(unsigned int time)
+{
+	unsigned int i,j;
+	for(i = 0; i < time ;i++ )
+		for(j = 0; j < 5000 ; j++);
+}
+
+void RTCInit(void)
+{
+	CIIR = 0x00;				 // no interrupt to be generated
+#ifdef RTConPrescaler
+	PREINT = 0x16D;				 // assuming 15 mhz PCLK.
+	PREFRAC = 0x1B00;			 // assuming 15 mhz PCLK.
+    CCR = 0x02;
+#else
+	CCR = 0x02;
+#endif
+}
+
+void SetTime(int hours, int mins, int sec)
+{
+	SEC  = sec;				// program the secs
+	MIN  = mins;			// program the mins
+	HOUR = hours;			// program the hours
+
+	CCR =  0x01;			// start the clock
+}
+
+int main(void)
+{
+	UartInit(9600);
+
+	RTCInit();
+	SetTime(5,30,01);
+
+	while(1)
+	{
+		printf("\nThe Time is ");
+		printf(":%02d",HOUR);
+		printf(":%02d",MIN);
+		printf(":%02d",SEC);
+		delay(500);
+	}
+return 0;
+}
+2)UART.c :
+
+#include "lpc214x.h"
+#include "stdio.h"
+void UartInit(unsigned int baudrate)	  //setting the baud rate for 115200 baud
+{
+ int i,FDiv;
+
+ i = PINSEL0;			   // read the value of the pins function
+ i = i & 0xFFFFFFF0;	   // modify the value
+ PINSEL0 = (i | 0x05);	   // set the functionality of the TxD and Rxd Pin	:01
+
+//set the baud rate
+	U0LCR = 0x83;						// Line control register :DLAB=1 ; 8 bits ; 1 stop bit ; no parity
+	FDiv = (15000000 / 16 ) / baudrate ; //
+	U0DLM = FDiv /256;					//0x00;
+	U0DLL = FDiv %256;					//0x97;
+	U0LCR = 0x03;						// Line control register :DLAB=0 ; 8 bits ; 1 stop bit ; no parity
+	U0TER = 0x80;
+}
+
+int UART_GetChar(void)
+{
+	while(!(U0LSR & 0x1));
+return(U0RBR);
+}
+
+int UART_PutChar(unsigned char Ch)
+{
+ if (Ch == '\n')  {
+    while (!(U0LSR & 0x20));
+    U0THR = 0x0D;                          /* output CR */
+}
+
+  while(!(U0LSR & 0x20));
+return( U0THR = Ch);
+}
+
+
+int fputc(int ch, FILE *f) {
+  return (UART_PutChar(ch));
+}
+
+struct __FILE { int handle; /* Add whatever you need here */ };
+FILE __stdout;
+
+3) LCD.c :
+  
+#include"lpc214x.h"
+#include"LCD.h"
+
+#define LCD_DATAMASK	0x000000FF
+#define LCD_PORT 		0x000FF000
+#define LCD_SHIFT		12
+#define LCD_RS			1 << 20
+#define LCD_EN 			1 << 21
+
+void LCD_delay(unsigned int time)
+{
+ unsigned int i , j ;
+
+	for(i = 0; i < time; i++)
+	{
+		for(j=0;j<500;j++);
+	}
+}
+
+void SendInstruction(unsigned int command)
+{
+	 command &= LCD_DATAMASK; 	// mask the command
+	 command = command << LCD_SHIFT;
+
+	//set RS pin low
+	 IOCLR1 = LCD_RS;		// RS low : Instruction
+	 LCD_delay(10);
+	//Set EN pin HIgh
+	 IOSET1 = LCD_EN;		// EN High
+	 LCD_delay(10);
+	//Set Data on pins
+	 IOCLR0 = LCD_PORT;
+	 IOSET0 = command; 		// DATA
+	 LCD_delay(10);
+	//set EN pin Low
+	 IOCLR1 = LCD_EN;		// EN Low
+	 LCD_delay(10);
+	 IOCLR1 = LCD_RS;		// RS Low
+	 IOCLR1 = LCD_DATAMASK << LCD_SHIFT;
+}
+
+void SendData(unsigned int lcddata)
+{
+	 lcddata &= LCD_DATAMASK; 	// mask the command
+	 lcddata = lcddata << LCD_SHIFT;
+
+	//set RS pin low
+	 IOSET1 = LCD_RS;		// RS HIGH : DATA
+	 LCD_delay(10);
+	//Set EN pin HIgh
+	 IOSET1 = LCD_EN;		// EN High
+	 LCD_delay(10);
+	//Set Data on pins
+	 IOCLR0 = LCD_PORT;
+	 IOSET0 = lcddata; 		// DATA
+	 LCD_delay(10);
+	//set EN pin Low
+	 IOCLR1 = LCD_EN;		// EN Low
+	 LCD_delay(10);
+	 IOCLR1 = LCD_RS;		// RS Low
+	 IOCLR1 = LCD_DATAMASK << LCD_SHIFT;
+}
+
+void SetLineNumber(unsigned int linenum)
+{
+	if(linenum == 1)
+	{
+	  SendInstruction( SETDDRAMADDR | 0x00 );		// set ddram address as 0x00
+	}
+	else
+	{
+	  SendInstruction( SETDDRAMADDR | 0x40 );		// set ddram address as 0x40
+	}
+
+}
+
+void SetAddress(unsigned char memory, unsigned int address )
+{
+
+	address &= 0x0000007F;
+
+	if(memory == DDRAM)
+	{
+	  SendInstruction( SETDDRAMADDR | address );
+	}
+	else
+	{
+	  SendInstruction( SETCGRAMADDR | address );
+	}
+
+}
+
+void BlinkDisplay(void)
+{
+
+	SendInstruction( DISPONOFFCTRL );
+	LCD_delay(500);
+	SendInstruction( DISPONOFFCTRL | DISPLAY_ON | CURSOR_ON | BLINKCHAR_ON );
+	LCD_delay(500);
+
+}
+
+void ShiftDisplay(unsigned char direction, unsigned int clicks)
+{
+unsigned int i;
+
+	if(direction == RIGHTSHIFT)
+	{
+	 for(i = 0; i < clicks ; i++)
+	 {
+	   SendInstruction( DISPCURSHIFT | SHIFTRIGHT );
+	 }
+	}
+	else
+	{
+	for(i = 0; i < clicks ; i++)
+	 {
+	   SendInstruction( DISPCURSHIFT );
+	 }
+
+	}
+}
+
+void ClearDisplay(void)
+{
+	 SendInstruction(CLEARDISPLAY);
+}
+
+
+void InitLCD(void)
+{
+unsigned int temp;
+
+	//initialise the pins for the lcd
+	temp  = PINSEL2;		// set the pins function as GPIO.
+	temp &= 0xFFFFFFF7;
+	PINSEL2 = 0;
+
+	IODIR1 = LCD_RS | LCD_EN;		//set the direction of the pins as output
+	IODIR0 = 0x000FF000;
+
+	//initialise the lcd : function set command : 8 bit interface : 5ms wait
+	SendInstruction( FUNCTIONSET | FS_DATALENGTH );
+	LCD_delay(5);
+
+	//initialise the lcd : function set command : 8 bit interface : 100us wait
+	SendInstruction( FUNCTIONSET | FS_DATALENGTH );
+	LCD_delay(1);
+
+	//initialise the lcd : function set command : 8 bit interface : set interface , line numbers and font size
+	SendInstruction( FUNCTIONSET | FS_DATALENGTH | FS_LINES2 );  // set interface 8 bit, no of lines =2 and character font 5x7
+
+	//display off
+	SendInstruction(DISPONOFFCTRL);
+
+	//clear display
+	SendInstruction(CLEARDISPLAY);
+
+	//entry mode set : increment / decrement
+	SendInstruction(ENTRYMODESET | ENTRYMODESET_INC);	//set as increment of address
+
+	//display on : set cursor and blinking
+//	SendInstruction(DISPONOFFCTRL | DISPLAY_ON | CURSOR_ON | BLINKCHAR_ON);	// display on and cursor blinking on
+	SendInstruction(DISPONOFFCTRL | DISPLAY_ON | CURSOR_ON );	// display on and cursor blinking on
+}
+
+4) LCD.h :
+//Commands for 16x2 character LCD
+
+#define CLEARDISPLAY 		0x01			// clear display command mask
+#define RETURNHOME 			0X02			// return home command mask
+#define ENTRYMODESET 		0X04			// entry mode set command mask
+#define DISPONOFFCTRL 		0X08			// display on off control mask
+#define DISPCURSHIFT 		0X10			// display cursor shift command mask
+#define FUNCTIONSET			0X20			// function set command mask
+#define SETCGRAMADDR 		0x40			// set cgram address mask
+#define SETDDRAMADDR		0X80			// set ddram address mask
+
+#define ENTRYMODESET_INC 	0X02			// entry mode increment mask
+#define ENTRYMODESET_DEC 	0X04			// entry mode decrement mask
+#define ENTRYMODESET_SHIFT 	0X01			// entry mode shift mask
+#define DISPLAY_ON			0x04			// display control entire display onoff mask
+#define CURSOR_ON			0x02			// display control curson onoff mask
+#define BLINKCHAR_ON		0x01			// display control character blink mask
+#define SHIFTCURSOR			0x08			// cursor shift mask
+#define SHIFTRIGHT			0x04			// cursor shift direction mask
+
+#define FS_DATALENGTH		0x10			// function set data length for 8 bit
+#define FS_LINES2			0x08			// function set line number for 2 line display
+#define FS_FONT				0x04			// function set font info mask for 5x10 dots
+
+#define DDRAM			1
+#define CGRAM			0
+#define RIGHTSHIFT		1
+#define LEFTSHIFT		0
+
+
+void SendInstruction(unsigned int);
+void SendData(unsigned int);
+void InitLCD(void);
+void SetLineNumber(unsigned int);
+void SetAddress(unsigned char, unsigned int );
+void BlinkDisplay(void);
+void ShiftDisplay(unsigned char, unsigned int);
+void RollDisplay(void);
+void ClearDisplay(void);
